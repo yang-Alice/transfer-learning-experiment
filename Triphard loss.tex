@@ -1,0 +1,123 @@
+% !TEX TS-program = pdflatex
+% !TEX encoding = UTF-8 Unicode
+
+% This is a simple template for a LaTeX document using the "article" class.
+% See "book", "report", "letter" for other types of document.
+
+\documentclass[UTF8]{ctexart} % use larger type; default would be 10pt
+
+\usepackage[utf8]{inputenc} % set input encoding (not needed with XeLaTeX)
+%%% PAGE DIMENSIONS
+\usepackage{geometry} % to change the page dimensions
+\geometry{a4paper} % or letterpaper (US) or a5paper or....
+\usepackage{amsmath}
+\usepackage[implicit=false]{hyperref}
+
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+    basicstyle          =   \sffamily,          % 基本代码风格
+    keywordstyle        =   \bfseries,          % 关键字风格
+    commentstyle        =   \rmfamily\itshape,  % 注释的风格，斜体
+    stringstyle         =   \ttfamily,  % 字符串风格
+    flexiblecolumns,                % 别问为什么，加上这个
+    numbers             =   left,   % 行号的位置在左边
+    showspaces          =   false,  % 是否显示空格，显示了有点乱，所以不现实了
+    numberstyle         =   \zihao{-5}\ttfamily,    % 行号的样式，小五号，tt等宽字体
+    showstringspaces    =   false,
+    captionpos          =   t,      % 这段代码的名字所呈现的位置，t指的是top上面
+    frame               =   lrtb,   % 显示边框
+}
+
+\lstdefinestyle{Python}{
+    language        =   Python, % 语言选Python
+    basicstyle      =   \zihao{-5}\ttfamily,
+    numberstyle     =   \zihao{-5}\ttfamily,
+    keywordstyle    =   \color{blue},
+    keywordstyle    =   [2] \color{teal},
+    stringstyle     =   \color{magenta},
+    commentstyle    =   \color{red}\ttfamily,
+    breaklines      =   true,   % 自动换行，建议不要写太长的行
+    columns         =   fixed,  % 如果不加这一句，字间距就不固定，很丑，必须加
+    basewidth       =   0.5em,
+}
+\lstset{breaklines}
+%%% The "real" document content comes below...
+
+\title{Triphard loss}
+\author{yang shuhui}
+
+\begin{document} 
+\maketitle
+
+\section{theory}
+
+\subsection{A subsection}
+
+
+\section{code}
+Reference:
+\begin{itemize}
+    \item  \href{https://blog.csdn.net/qq_32523711/article/details/103826600}{Triphard loss code}
+    \item \href{https://github.com/Cysu/open-reid/blob/master/reid/loss/triplet.py}{github code}
+    \item \href{https://blog.csdn.net/tangwei2014/article/details/46788025}{Triphard loss gradient}
+    \item Hermans et al. In Defense of the Triplet Loss for Person Re-Identification. arXiv:1703.07737.
+\end{itemize}
+\begin{lstlisting}
+    class TripletLoss(nn.Module):
+    """Triplet loss with hard positive/negative mining.
+        
+    Args:
+        margin (float, optional): margin for triplet. Default is 0.3.
+    """
+    
+    def __init__(self, margin=0.3,global_feat, labels):
+        super(TripletLoss, self).__init__()
+        self.margin = margin
+        # https://pytorch.org/docs/1.2.0/nn.html?highlight=marginrankingloss#torch.nn.MarginRankingLoss
+        self.ranking_loss = nn.MarginRankingLoss(margin=margin)
+ 
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs (torch.Tensor): feature matrix with shape (batch_size, feat_dim).
+            targets (torch.LongTensor): ground truth labels with shape (num_classes).
+        """
+        n = inputs.size(0)	# batch_size
+        
+        # Compute pairwise distance, replace by the official when merged
+        dist = torch.pow(inputs, 2).sum(dim=1, keepdim=True).expand(n, n)
+        dist = dist + dist.t()
+        dist.addmm_(1, -2, inputs, inputs.t())
+        dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+\end{lstlisting}
+input: inputs(batch size, feat dim),noted  
+ \[\left ( \begin{matrix} S_1 \\ S_2 \\ S_3 \end{matrix} \right) \]
+where $S_i$: (1, feat dim) is one sample.
+\[ dist = \left ( \begin{matrix} S_1^2 & S_1^2 & S_1^2 \\ S_2^2 & S_2^2 & S_2^2 \\ S_3^2 & S_3^2 & S_3^2 \end{matrix} \right )\]
+\[dist = \left ( \begin{matrix}  {S_1^2+S_1^2} &  {S_1^2+S_2^2} &  {S_1^2+S_3^2} \\
+     {S_2^2+S_1^2} &  {S_2^2+S_2^2} &  {S_2^2+S_3^2} \\  {S_3^2+S_1^2} &  {S_3^2+S_2^2} &  {S_3^2+S_3^2} \end{matrix} \right )\]
+\[dist=1 \times dist - 2 \times inputs \cdot input^\mathrm{T} = \left ( \begin{matrix}  0 &  S_1^2+S_2^2-2S_1S_2 &  S_1^2+S_3^2-2S_1S_3 \\
+    S_2^2+S_1^2-2S_2S_1 & 0 &  S_2^2+S_3^2-2S_2S_3 \\  S_3^2+S_1^2-2S_3S_1 &  S_3^2+S_2^2-2S_3S_2 & 0 \end{matrix} \right ) \]
+
+\begin{lstlisting}      
+        # For each anchor, find the hardest positive and negative
+        mask = targets.expand(n, n).eq(targets.expand(n, n).t())
+        dist_ap, dist_an = [], []
+        for i in range(n):
+            dist_ap.append(dist[i][mask[i]].max().unsqueeze(0))
+            dist_an.append(dist[i][mask[i] == 0].min().unsqueeze(0))
+        dist_ap = torch.cat(dist_ap)
+        dist_an = torch.cat(dist_an)
+        
+        # Compute ranking hinge loss
+        y = torch.ones_like(dist_an)
+        loss = self.ranking_loss(dist_an, dist_ap, y)
+        return loss
+
+\end{lstlisting}
+\[\text{targets.expand(n, n)}= \left(\begin{matrix} y_1 & y_1 & y_1 \\ y_2 & y_2 & y_2 \\y_3 & y_3 & y_3\end{matrix} \right )\]
+\[ mask= (mask_{ij}) \text{if} y_i , y_j \text{is of same class, } mask_{ij}=1 . \text{if not ,} mask_{ij}=0 .\]
+\href{https://pytorch.org/docs/1.2.0/nn.html?highlight=marginrankingloss#torch.nn.MarginRankingLoss}{marginrankingloss}
+
+\end{document}
